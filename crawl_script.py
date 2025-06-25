@@ -15,8 +15,8 @@ from html import unescape
 
 #-----------------------------------------------------------------------------------
 # Your Crawl4AI server configuration                                               |
-CRAWL4AI_BASE_URL = "https://Your-URL-Here" #                |
-API_TOKEN = "xxxx" # omit this if your installation is unsecured.      |
+CRAWL4AI_BASE_URL = "https://your-url-here" #                |
+API_TOKEN = "xxxxx" # omit this if your installation is unsecured.      |
 #-----------------------------------------------------------------------------------
 
 def get_auth_headers():
@@ -91,27 +91,85 @@ def clean_markdown_content(content):
     
     return text.strip()
 
-def extract_clean_content(result):
-    """Extract clean markdown content from crawl results"""
+def extract_article_content(result):
+    """Extract only article title and body content, filtering out navigation and menus"""
     # Handle nested results structure
     if isinstance(result, dict) and 'results' in result and result['results']:
         actual_result = result['results'][0]
     else:
         actual_result = result
     
-    # Try to get clean markdown content
+    # Try to get structured data first (better for filtering)
+    if 'extracted_content' in actual_result and actual_result['extracted_content']:
+        extracted = actual_result['extracted_content']
+        if isinstance(extracted, list) and len(extracted) > 0:
+            # Look for article-like content
+            for item in extracted:
+                if isinstance(item, dict) and 'text' in item:
+                    # Check if this looks like main content (longer text blocks)
+                    text = item['text'].strip()
+                    if len(text) > 200:  # Likely main content
+                        return clean_markdown_content(text)
+    
+    # Fall back to markdown with better filtering
+    content = None
     if 'markdown' in actual_result and actual_result['markdown']:
         content = actual_result['markdown']
-        return clean_markdown_content(content)
-    
-    # Try markdown_v2
-    if 'markdown_v2' in actual_result and actual_result['markdown_v2']:
+    elif 'markdown_v2' in actual_result and actual_result['markdown_v2']:
         markdown_v2 = actual_result['markdown_v2']
         if isinstance(markdown_v2, dict) and 'raw_markdown' in markdown_v2:
             content = markdown_v2['raw_markdown']
-            return clean_markdown_content(content)
+    
+    if content:
+        return filter_article_content(content)
     
     return None
+
+def filter_article_content(content):
+    """Filter content to extract only article title and body"""
+    if not content:
+        return ""
+    
+    lines = content.split('\n')
+    filtered_lines = []
+    
+    # Much more conservative patterns - only skip obvious navigation/UI elements
+    skip_patterns = [
+        r'^menu$', r'^navigation$', r'^nav$', r'^header$', r'^footer$', r'^sidebar$',
+        r'^subscribe$', r'^newsletter$', r'^follow us$', r'^share$', r'^comments$',
+        r'^login$', r'^register$', r'^search$', r'^home$', r'^back to home$',
+        r'^\* \[.*\]$', r'^\[.*\]\(.*\)$',  # Pure link lines
+        r'^©.*\d{4}', r'^last modified', r'^view all$', r'^view image$',
+        r'^toggle', r'^close dialogue', r'^next image', r'^previous image',
+        r'^back$', r'^continue$', r'^more$', r'^less$'
+    ]
+    
+    skip_regex = re.compile('|'.join(skip_patterns), re.IGNORECASE)
+    
+    # Process all lines with minimal filtering
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        # Only skip if it exactly matches navigation patterns
+        if skip_regex.match(line):
+            continue
+        
+        # Skip very short lines that are likely navigation (but keep short quotes/names)
+        if len(line) < 10 and not re.search(r'[.!?"]', line):
+            continue
+        
+        # Skip lines that are purely links with no content
+        if re.match(r'^\[.*\]\(.*\)$', line):
+            continue
+        
+        # Keep everything else - this includes titles, subtitles, body text, quotes, etc.
+        filtered_lines.append(line)
+    
+    # Join with proper spacing
+    result = '\n\n'.join(filtered_lines)
+    return clean_markdown_content(result)
 
 def wait_for_completion(task_id, headers, target_url):
     """Wait for async task to complete"""
@@ -132,7 +190,7 @@ def wait_for_completion(task_id, headers, target_url):
                         final_result = result.get('result', result)
                         
                         # Extract and save content
-                        content = extract_clean_content(final_result)
+                        content = extract_article_content(final_result)
                         if content:
                             save_markdown(content, target_url)
                             return True
@@ -243,7 +301,13 @@ def process_single_url(url):
     headers = get_auth_headers()
     crawl_data = {
         "urls": [cleaned_url],
-        "cache_key": f"fresh_{int(time.time())}"
+        "cache_key": f"fresh_{int(time.time())}",
+        "extraction_strategy": "NoExtractionStrategy",  # Get raw content, filter ourselves
+        "word_count_threshold": 10,  # Much lower threshold
+        "exclude_external_links": False,  # Keep links for context
+        "exclude_social_media_links": False,
+        "remove_overlay_elements": True,
+        "only_text": False  # Keep formatting
     }
     
     try:
@@ -269,7 +333,7 @@ def process_single_url(url):
                     return False
             else:
                 # Direct response
-                content = extract_clean_content(result)
+                content = extract_article_content(result)
                 if content:
                     save_markdown(content, cleaned_url)
                     return True
