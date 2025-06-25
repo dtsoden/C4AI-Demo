@@ -1,4 +1,4 @@
-# C4AI-Demo
+# Crawl 4 AI Demo
 A Crawl 4 AI Demonstration
 
 ## Slideshow: Fix 80% of Your RAG Problems with Clean Data
